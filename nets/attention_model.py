@@ -87,14 +87,14 @@ class AttentionModel(nn.Module):
 
             # Special embedding projection for depot node
             self.init_embed_depot = nn.Linear(2, embedding_dim)
-            
+
             if self.is_vrp and self.allow_partial:  # Need to include the demand if split delivery allowed
                 self.project_node_step = nn.Linear(1, 3 * embedding_dim, bias=False)
         else:  # TSP
             assert problem.NAME == "tsp", "Unsupported problem: {}".format(problem.NAME)
             step_context_dim = 2 * embedding_dim  # Embedding of first and last node
             node_dim = 2  # x, y
-            
+
             # Learned input symbols for first action
             self.W_placeholder = nn.Parameter(torch.Tensor(2 * embedding_dim))
             self.W_placeholder.data.uniform_(-1, 1)  # Placeholder should be in range of activations
@@ -134,12 +134,10 @@ class AttentionModel(nn.Module):
         else:
             embeddings, _ = self.embedder(self._init_embed(input))
 
-        _log_p, pi = self._inner(input, embeddings)
+        torch.autograd.set_detect_anomaly(True)
+        ll, pi, loc = self._inner(input, embeddings)
 
-        cost, mask = self.problem.get_costs(input, pi)
-        # Log likelyhood is calculated within the model since returning it per action does not work well with
-        # DataParallel since sequences can be of different lengths
-        ll = self._calc_log_likelihood(_log_p, pi, mask)
+        cost, mask = self.problem.get_costs(loc, pi)
         if return_pi:
             return cost, ll, pi
 
@@ -186,17 +184,17 @@ class AttentionModel(nn.Module):
 
     def _calc_log_likelihood(self, _log_p, a, mask):
 
-        # Get log_p corresponding to selected actions
-        log_p = _log_p.gather(2, a.unsqueeze(-1)).squeeze(-1)
-
         # Optional: mask out actions irrelevant to objective so they do not get reinforced
         if mask is not None:
-            log_p[mask] = 0
+            _log_p[mask] = 0
+
+        # Get log_p corresponding to selected actions
+        log_p = _log_p.gather(1, a.unsqueeze(-1)).squeeze(-1)
 
         assert (log_p > -1000).data.all(), "Logprobs should not be -inf, check sampling procedure!"
 
         # Calculate log_likelihood
-        return log_p.sum(1)
+        return log_p
 
     def _init_embed(self, input):
 
@@ -232,9 +230,11 @@ class AttentionModel(nn.Module):
         fixed = self._precompute(embeddings)
 
         batch_size = state.ids.size(0)
+        graph_size = state.loc.size(1)
+
 
         # Perform decoding steps
-        i = 0
+        ll = torch.zeros(batch_size, device=embeddings.device)
         while not (self.shrink_size is None and state.all_finished()):
 
             if self.shrink_size is not None:
@@ -256,6 +256,16 @@ class AttentionModel(nn.Module):
 
             state = state.update(selected)
 
+            if state.loc.size(1) > graph_size:
+                if self.checkpoint_encoder:  # Only checkpoint if we need gradients
+                    embeddings, _ = checkpoint(self.embedder, self._init_embed(state.loc))
+                else:
+                    embeddings, _ = self.embedder(self._init_embed(state.loc))
+
+                del fixed
+                fixed = self._precompute(embeddings)
+                graph_size = state.loc.size(1)
+
             # Now make log_p, selected desired output size by 'unshrinking'
             if self.shrink_size is not None and state.ids.size(0) < batch_size:
                 log_p_, selected_ = log_p, selected
@@ -266,13 +276,14 @@ class AttentionModel(nn.Module):
                 selected[state.ids[:, 0]] = selected_
 
             # Collect output of step
-            outputs.append(log_p[:, 0, :])
+            # Log likelyhood is calculated within the model since returning it per action does not work well with
+            # DataParallel since sequences can be of different lengths
+            # TODO: change for non-tsp problems that do use a mase
+            ll += self._calc_log_likelihood(log_p[:, 0, :], selected, None)
             sequences.append(selected)
 
-            i += 1
-
         # Collected lists, return Tensor
-        return torch.stack(outputs, 1), torch.stack(sequences, 1)
+        return ll / graph_size, torch.stack(sequences, 1), state.loc
 
     def sample_many(self, input, batch_rep=1, iter_rep=1):
         """
@@ -367,7 +378,7 @@ class AttentionModel(nn.Module):
     def _get_parallel_step_context(self, embeddings, state, from_depot=False):
         """
         Returns the context per step, optionally for multiple steps at once (for efficient evaluation of the model)
-        
+
         :param embeddings: (batch_size, graph_size, embed_dim)
         :param prev_a: (batch_size, num_steps)
         :param first_a: Only used when num_steps = 1, action of first step or None if first step
@@ -423,7 +434,7 @@ class AttentionModel(nn.Module):
                 -1
             )
         else:  # TSP
-        
+
             if num_steps == 1:  # We need to special case if we have only 1 step, may be the first or not
                 if state.i.item() == 0:
                     # First and only step, ignore prev_a (this is a placeholder)

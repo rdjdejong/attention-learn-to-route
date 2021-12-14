@@ -7,6 +7,9 @@ class StateTSP(NamedTuple):
     # Fixed input
     loc: torch.Tensor
     dist: torch.Tensor
+    dynamic: bool
+    prob: float
+    max_loc: int
 
     # If this state contains multiple copies (i.e. beam search) for the same instance, then for memory efficiency
     # the loc and dist tensors are not kept multiple times, so we need to use the ids to index the correct rows.
@@ -39,7 +42,7 @@ class StateTSP(NamedTuple):
         )
 
     @staticmethod
-    def initialize(loc, visited_dtype=torch.uint8):
+    def initialize(loc, visited_dtype=torch.uint8, dynamic=True, prob=0.8):
 
         batch_size, n_loc, _ = loc.size()
         prev_a = torch.zeros(batch_size, 1, dtype=torch.long, device=loc.device)
@@ -60,7 +63,10 @@ class StateTSP(NamedTuple):
             ),
             lengths=torch.zeros(batch_size, 1, device=loc.device),
             cur_coord=None,
-            i=torch.zeros(1, dtype=torch.int64, device=loc.device)  # Vector with length num_steps
+            i=torch.zeros(1, dtype=torch.int64, device=loc.device),  # Vector with length num_steps
+            dynamic=dynamic,
+            prob=prob,
+            max_loc=int(n_loc * 1.5)
         )
 
     def get_final_cost(self):
@@ -94,8 +100,23 @@ class StateTSP(NamedTuple):
         else:
             visited_ = mask_long_scatter(self.visited_, prev_a)
 
-        return self._replace(first_a=first_a, prev_a=prev_a, visited_=visited_,
+        self = self._replace(first_a=first_a, prev_a=prev_a, visited_=visited_,
                              lengths=lengths, cur_coord=cur_coord, i=self.i + 1)
+
+        if self.dynamic and not self.all_finished():
+            batch_size = self.loc.size(0)
+            device = self.loc.device
+            while self.loc.size(1) < self.max_loc and torch.rand(1) > self.prob:
+                new_loc = torch.rand((batch_size, 1, 2), device=device)
+                loc = torch.cat((self.loc, new_loc), dim=1)
+                new_visited = torch.zeros(batch_size, 1, 1,
+                                            dtype=torch.uint8, device=device)
+                visited_ = torch.cat((self.visited_, new_visited), dim=-1)
+                dist = (loc[:, :, None, :] - loc[:, None, :, :]).norm(p=2, dim=-1)
+                self = self._replace(loc=loc, visited_=visited_, dist=dist)
+
+
+        return self
 
     def all_finished(self):
         # Exactly n steps
