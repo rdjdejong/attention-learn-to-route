@@ -34,7 +34,8 @@ class TSP(object):
 
     @staticmethod
     def beam_search(input, beam_size, expand_size=None,
-                    compress_mask=False, model=None, max_calc_batch_size=4096):
+                    compress_mask=False, model=None, max_calc_batch_size=4096,
+                    dynamic=False, probability=0.8):
 
         assert model is not None, "Provide model"
 
@@ -46,7 +47,8 @@ class TSP(object):
             )
 
         state = TSP.make_state(
-            input, visited_dtype=torch.int64 if compress_mask else torch.uint8
+            input, visited_dtype=torch.int64 if compress_mask else torch.uint8,
+            dynamic=dynamic, prob=probability
         )
 
         return beam_search(state, beam_size, propose_expansions)

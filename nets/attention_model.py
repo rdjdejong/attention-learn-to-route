@@ -45,6 +45,8 @@ class AttentionModel(nn.Module):
                  embedding_dim,
                  hidden_dim,
                  problem,
+                 dynamic,
+                 probability,
                  n_encode_layers=2,
                  tanh_clipping=10.,
                  mask_inner=True,
@@ -71,6 +73,8 @@ class AttentionModel(nn.Module):
         self.mask_logits = mask_logits
 
         self.problem = problem
+        self.dynamic = dynamic
+        self.probability = probability
         self.n_heads = n_heads
         self.checkpoint_encoder = checkpoint_encoder
         self.shrink_size = shrink_size
@@ -224,7 +228,8 @@ class AttentionModel(nn.Module):
         outputs = []
         sequences = []
 
-        state = self.problem.make_state(input)
+        state = self.problem.make_state(input, dynamic=self.dynamic,
+                                        prob=self.probability)
 
         # Compute keys, values for the glimpse and keys for the logits once as they can be reused in every step
         fixed = self._precompute(embeddings)
@@ -278,7 +283,7 @@ class AttentionModel(nn.Module):
             # Collect output of step
             # Log likelyhood is calculated within the model since returning it per action does not work well with
             # DataParallel since sequences can be of different lengths
-            # TODO: change for non-tsp problems that do use a mase
+            # TODO: change for non-tsp problems that do use a mask
             ll += self._calc_log_likelihood(log_p[:, 0, :], selected, None)
             sequences.append(selected)
 

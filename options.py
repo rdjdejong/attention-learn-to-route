@@ -10,6 +10,8 @@ def get_options(args=None):
 
     # Data
     parser.add_argument('--problem', default='tsp', help="The problem to solve, default 'tsp'")
+    parser.add_argument('--dynamic', action='store_true', help='Specifies whether the problem is dynamic')
+    parser.add_argument('--probability', type=float, default=0.8, help='If the problem is dynamic, specifies the probability that a new datapoint is added')
     parser.add_argument('--graph_size', type=int, default=20, help="The size of the problem graph")
     parser.add_argument('--batch_size', type=int, default=512, help='Number of instances per batch during training')
     parser.add_argument('--epoch_size', type=int, default=1280000, help='Number of instances per epoch during training')
@@ -84,4 +86,5 @@ def get_options(args=None):
         opts.bl_warmup_epochs = 1 if opts.baseline == 'rollout' else 0
     assert (opts.bl_warmup_epochs == 0) or (opts.baseline == 'rollout')
     assert opts.epoch_size % opts.batch_size == 0, "Epoch size must be integer multiple of batch size!"
+    assert 1 > opts.probability >= 0, "Probability must be between 0 and 1"
     return opts

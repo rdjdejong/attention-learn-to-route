@@ -59,6 +59,8 @@ def run(opts):
         opts.embedding_dim,
         opts.hidden_dim,
         problem,
+        opts.dynamic,
+        opts.probability,
         n_encode_layers=opts.n_encode_layers,
         mask_inner=True,
         mask_logits=True,
