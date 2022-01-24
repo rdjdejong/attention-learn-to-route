@@ -15,12 +15,12 @@ from utils.data_utils import load_dataset, save_dataset
 from gurobipy import *
 
 
-def solve_euclidian_tsp(points, threads=0, timeout=None, gap=None):
+def solve_euclidian_tsp(points, tour_taken, threads=0, timeout=None, gap=None):
     """
-    Solves the Euclidan TSP problem to optimality using the MIP formulation 
+    Solves the Euclidan TSP problem to optimality using the MIP formulation
     with lazy subtour elimination constraint generation.
-    :param points: list of (x, y) coordinate 
-    :return: 
+    :param points: list of (x, y) coordinate
+    :return:
     """
 
     n = len(points)
@@ -71,6 +71,12 @@ def solve_euclidian_tsp(points, threads=0, timeout=None, gap=None):
     vars = m.addVars(dist.keys(), obj=dist, vtype=GRB.BINARY, name='e')
     for i,j in vars.keys():
         vars[j,i] = vars[i,j] # edge in opposite direction
+
+    if len(tour_taken) > 1:
+        fixed_tour = list(zip(tour_taken, tour_taken[1:]))
+        for i,j in vars.keys():
+            if i in tour_taken and (i, j) in fixed_tour:
+                    m.addConstr(vars[i, j] == 1)
 
     # You could use Python looping constructs and m.addVar() to create
     # these decision variables instead.  The following would be equivalent

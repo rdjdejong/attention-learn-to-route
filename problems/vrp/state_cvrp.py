@@ -49,7 +49,7 @@ class StateCVRP(NamedTuple):
     #     return len(self.used_capacity)
 
     @staticmethod
-    def initialize(input, visited_dtype=torch.uint8):
+    def initialize(input, visited_dtype=torch.uint8, dynamic=False, prob=0.8):
 
         depot = input['depot']
         loc = input['loc']

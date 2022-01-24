@@ -56,19 +56,56 @@ class TSP(object):
 
 class TSPDataset(Dataset):
 
-    def __init__(self, filename=None, size=50, num_samples=1000000, offset=0, distribution=None):
+    def __init__(self, filename=None, size=50, num_samples=1000000, offset=0,
+                 distribution=None, dynamic=False, probability=0.2):
         super(TSPDataset, self).__init__()
 
-        self.data_set = []
+        self.dynamic = dynamic
+
         if filename is not None:
             assert os.path.splitext(filename)[1] == '.pkl'
 
             with open(filename, 'rb') as f:
                 data = pickle.load(f)
+                if self.dynamic:
+                    data, revealed = data
+                    self.revealed = [torch.IntTensor(row) for row in (revealed[offset:offset+num_samples])]
+
                 self.data = [torch.FloatTensor(row) for row in (data[offset:offset+num_samples])]
         else:
-            # Sample points randomly in [0, 1] square
-            self.data = [torch.FloatTensor(size, 2).uniform_(0, 1) for i in range(num_samples)]
+            if self.dynamic:
+                dyn_size = int(size * 1.5)
+
+                # Sample points randomly in [0, 1] square
+                self.data = [torch.FloatTensor(dyn_size, 2).uniform_(0, 1) for i in range(num_samples)]
+
+                # Sample random numbers
+                rand = torch.rand((num_samples, dyn_size))
+
+                # Calculate the number of nodes revealed using log of the probability
+                # rand < prob**nodes_revealed
+                log_base = torch.log(torch.tensor([probability]))
+                nodes_revealed = torch.floor(torch.log(rand) / log_base).int()
+
+                # Mask all nodes added above the max
+                max_reached = torch.cumsum(nodes_revealed, dim=1) + size
+                max_reached[max_reached > dyn_size] = dyn_size
+
+                # Mask all nodes that won't be reached
+                n_nodes = torch.full((num_samples, size), size)
+                dyn_nodes = torch.range(size + 1, dyn_size).repeat(num_samples, 1)
+                n_nodes = torch.cat((n_nodes, dyn_nodes), dim=1)
+
+                # Mask the nodes that wouldn't be revealed
+                cutoff = torch.argmax((max_reached < n_nodes).double(), axis=1)
+                for i, idx in enumerate(cutoff):
+                    if idx > 0:
+                        max_reached[i][idx:] = idx
+
+                self.revealed = [x for x in max_reached]
+            else:
+                # Sample points randomly in [0, 1] square
+                self.data = [torch.FloatTensor(size, 2).uniform_(0, 1) for i in range(num_samples)]
 
         self.size = len(self.data)
 
@@ -76,4 +113,6 @@ class TSPDataset(Dataset):
         return self.size
 
     def __getitem__(self, idx):
+        if self.dynamic:
+            return {"loc": self.data[idx], "revealed": self.revealed[idx]}
         return self.data[idx]

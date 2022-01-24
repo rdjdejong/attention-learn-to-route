@@ -45,8 +45,8 @@ class AttentionModel(nn.Module):
                  embedding_dim,
                  hidden_dim,
                  problem,
-                 dynamic,
-                 probability,
+                 dynamic=False,
+                 probability=0.8,
                  n_encode_layers=2,
                  tanh_clipping=10.,
                  mask_inner=True,
@@ -133,15 +133,16 @@ class AttentionModel(nn.Module):
         :return:
         """
 
+        state = self.problem.make_state(input)
+
         if self.checkpoint_encoder and self.training:  # Only checkpoint if we need gradients
-            embeddings, _ = checkpoint(self.embedder, self._init_embed(input))
+            embeddings, _ = checkpoint(self.embedder, self._init_embed(state.get_loc()))
         else:
-            embeddings, _ = self.embedder(self._init_embed(input))
+            embeddings, _ = self.embedder(self._init_embed(state.get_loc()))
 
-        torch.autograd.set_detect_anomaly(True)
-        ll, pi, loc = self._inner(input, embeddings)
+        ll, pi, state = self._inner(state, embeddings)
 
-        cost, mask = self.problem.get_costs(loc, pi)
+        cost, mask = self.problem.get_costs(state.get_loc(), pi)
         if return_pi:
             return cost, ll, pi
 
@@ -223,20 +224,17 @@ class AttentionModel(nn.Module):
         # TSP
         return self.init_embed(input)
 
-    def _inner(self, input, embeddings):
+    def _inner(self, state, embeddings):
 
         outputs = []
         sequences = []
 
-        state = self.problem.make_state(input, dynamic=self.dynamic,
-                                        prob=self.probability)
 
         # Compute keys, values for the glimpse and keys for the logits once as they can be reused in every step
         fixed = self._precompute(embeddings)
 
-        batch_size = state.ids.size(0)
-        graph_size = state.loc.size(1)
-
+        loc = state.get_loc()
+        batch_size, graph_size, _ = loc.size()
 
         # Perform decoding steps
         ll = torch.zeros(batch_size, device=embeddings.device)
@@ -261,15 +259,17 @@ class AttentionModel(nn.Module):
 
             state = state.update(selected)
 
-            if state.loc.size(1) > graph_size:
+            loc = state.get_loc()
+
+            if loc.size(1) > graph_size:
                 if self.checkpoint_encoder:  # Only checkpoint if we need gradients
-                    embeddings, _ = checkpoint(self.embedder, self._init_embed(state.loc))
+                    embeddings, _ = checkpoint(self.embedder, self._init_embed(loc))
                 else:
-                    embeddings, _ = self.embedder(self._init_embed(state.loc))
+                    embeddings, _ = self.embedder(self._init_embed(loc))
 
                 del fixed
                 fixed = self._precompute(embeddings)
-                graph_size = state.loc.size(1)
+                graph_size = loc.size(1)
 
             # Now make log_p, selected desired output size by 'unshrinking'
             if self.shrink_size is not None and state.ids.size(0) < batch_size:
@@ -288,7 +288,7 @@ class AttentionModel(nn.Module):
             sequences.append(selected)
 
         # Collected lists, return Tensor
-        return ll / graph_size, torch.stack(sequences, 1), state.loc
+        return ll / graph_size, torch.stack(sequences, 1), state
 
     def sample_many(self, input, batch_rep=1, iter_rep=1):
         """
