@@ -48,6 +48,7 @@ class AttentionModel(nn.Module):
                  dynamic=False,
                  probability=0.8,
                  embedder_embed_attention=False,
+                 separate_dyn_embedder=False,
                  n_encode_layers=2,
                  tanh_clipping=10.,
                  mask_inner=True,
@@ -57,8 +58,6 @@ class AttentionModel(nn.Module):
                  checkpoint_encoder=False,
                  shrink_size=None):
         super(AttentionModel, self).__init__()
-
-        print(embedder_embed_attention)
 
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
@@ -79,6 +78,7 @@ class AttentionModel(nn.Module):
         self.dynamic = dynamic
         self.probability = probability
         self.embedder_embed_attention = embedder_embed_attention
+        self.separate_dyn_embedder = separate_dyn_embedder
         self.n_heads = n_heads
         self.checkpoint_encoder = checkpoint_encoder
         self.shrink_size = shrink_size
@@ -109,7 +109,7 @@ class AttentionModel(nn.Module):
 
         self.init_embed = nn.Linear(node_dim, embedding_dim)
 
-        if self.embedder_embed_attention:
+        if self.embedder_embed_attention and not self.separate_dyn_embedder:
             self.E_placeholder = nn.Parameter(torch.Tensor(embedding_dim))
             self.E_placeholder.data.uniform_(-1, 1)  # Placeholder should be in range of activations
 
@@ -119,6 +119,16 @@ class AttentionModel(nn.Module):
             n_layers=self.n_encode_layers,
             normalization=normalization
         )
+
+        if self.separate_dyn_embedder:
+            self.dyn_embedder = GraphAttentionEncoder(
+                n_heads=n_heads,
+                embed_dim=embedding_dim,
+                n_layers=self.n_encode_layers,
+                normalization=normalization
+            )
+        else:
+            self.dyn_embedder = self.embedder
 
         # For each node we compute (glimpse key, glimpse value, logit key) so 3 * embedding_dim
         self.project_node_embeddings = nn.Linear(embedding_dim, 3 * embedding_dim, bias=False)
@@ -148,8 +158,9 @@ class AttentionModel(nn.Module):
         else:
             embeddings, _ = self.embedder(self._init_embed(state.get_loc()))
 
-        if self.embedder_embed_attention:
+        if self.embedder_embed_attention and not self.separate_dyn_embedder:
             embeddings = embeddings[:, 1:, :]
+
         ll, pi, state = self._inner(state, embeddings)
 
         cost, mask = self.problem.get_costs(state.get_loc(), pi)
@@ -236,16 +247,19 @@ class AttentionModel(nn.Module):
 
         if self.embedder_embed_attention:
             if prev_embedding is None:
-                return torch.cat(
-                    (
-                        self.E_placeholder[None, None, :].expand(
-                            embed.size(0),
-                            1,
-                            self.E_placeholder.size(-1)
-                        ),
-                        embed
-                    ), dim=1
-                )
+                if self.separate_dyn_embedder:
+                    return embed
+                else:
+                    return torch.cat(
+                        (
+                            self.E_placeholder[None, None, :].expand(
+                                embed.size(0),
+                                1,
+                                self.E_placeholder.size(-1)
+                            ),
+                            embed
+                        ), dim=1
+                    )
             return torch.cat(
                 (prev_embedding.mean(1, keepdims=True), embed),
                 dim=1
@@ -293,14 +307,14 @@ class AttentionModel(nn.Module):
             if loc.size(1) > graph_size:
                 if self.checkpoint_encoder:  # Only checkpoint if we need gradients
                     new_embeddings, _ = checkpoint(
-                        self.embedder,
+                        self.dyn_embedder,
                         self._init_embed(
                             loc[:, graph_size:] if self.embedder_embed_attention else loc,
                             embeddings
                         )
                     )
                 else:
-                    new_embeddings, _ = self.embedder(
+                    new_embeddings, _ = self.dyn_embedder(
                         self._init_embed(
                             loc[:, graph_size:] if self.embedder_embed_attention else loc,
                             embeddings
