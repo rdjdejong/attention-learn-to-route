@@ -61,6 +61,7 @@ def run(opts):
         problem,
         opts.dynamic,
         opts.probability,
+        opts.encoder_embedding_attention,
         n_encode_layers=opts.n_encode_layers,
         mask_inner=True,
         mask_logits=True,

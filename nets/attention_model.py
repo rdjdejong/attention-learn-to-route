@@ -47,6 +47,7 @@ class AttentionModel(nn.Module):
                  problem,
                  dynamic=False,
                  probability=0.8,
+                 embedder_embed_attention=False,
                  n_encode_layers=2,
                  tanh_clipping=10.,
                  mask_inner=True,
@@ -56,6 +57,8 @@ class AttentionModel(nn.Module):
                  checkpoint_encoder=False,
                  shrink_size=None):
         super(AttentionModel, self).__init__()
+
+        print(embedder_embed_attention)
 
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
@@ -75,6 +78,7 @@ class AttentionModel(nn.Module):
         self.problem = problem
         self.dynamic = dynamic
         self.probability = probability
+        self.embedder_embed_attention = embedder_embed_attention
         self.n_heads = n_heads
         self.checkpoint_encoder = checkpoint_encoder
         self.shrink_size = shrink_size
@@ -104,6 +108,10 @@ class AttentionModel(nn.Module):
             self.W_placeholder.data.uniform_(-1, 1)  # Placeholder should be in range of activations
 
         self.init_embed = nn.Linear(node_dim, embedding_dim)
+
+        if self.embedder_embed_attention:
+            self.E_placeholder = nn.Parameter(torch.Tensor(embedding_dim))
+            self.E_placeholder.data.uniform_(-1, 1)  # Placeholder should be in range of activations
 
         self.embedder = GraphAttentionEncoder(
             n_heads=n_heads,
@@ -140,6 +148,8 @@ class AttentionModel(nn.Module):
         else:
             embeddings, _ = self.embedder(self._init_embed(state.get_loc()))
 
+        if self.embedder_embed_attention:
+            embeddings = embeddings[:, 1:, :]
         ll, pi, state = self._inner(state, embeddings)
 
         cost, mask = self.problem.get_costs(state.get_loc(), pi)
@@ -201,7 +211,7 @@ class AttentionModel(nn.Module):
         # Calculate log_likelihood
         return log_p
 
-    def _init_embed(self, input):
+    def _init_embed(self, input, prev_embedding=None):
 
         if self.is_vrp or self.is_orienteering or self.is_pctsp:
             if self.is_vrp:
@@ -211,7 +221,7 @@ class AttentionModel(nn.Module):
             else:
                 assert self.is_pctsp
                 features = ('deterministic_prize', 'penalty')
-            return torch.cat(
+            embed = torch.cat(
                 (
                     self.init_embed_depot(input['depot'])[:, None, :],
                     self.init_embed(torch.cat((
@@ -221,8 +231,27 @@ class AttentionModel(nn.Module):
                 ),
                 1
             )
-        # TSP
-        return self.init_embed(input)
+        else: # TSP
+            embed = self.init_embed(input)
+
+        if self.embedder_embed_attention:
+            if prev_embedding is None:
+                return torch.cat(
+                    (
+                        self.E_placeholder[None, None, :].expand(
+                            embed.size(0),
+                            1,
+                            self.E_placeholder.size(-1)
+                        ),
+                        embed
+                    ), dim=1
+                )
+            return torch.cat(
+                (prev_embedding.mean(1, keepdims=True), embed),
+                dim=1
+            )
+
+        return embed
 
     def _inner(self, state, embeddings):
 
@@ -263,13 +292,33 @@ class AttentionModel(nn.Module):
 
             if loc.size(1) > graph_size:
                 if self.checkpoint_encoder:  # Only checkpoint if we need gradients
-                    embeddings, _ = checkpoint(self.embedder, self._init_embed(loc))
+                    new_embeddings, _ = checkpoint(
+                        self.embedder,
+                        self._init_embed(
+                            loc[:, graph_size:] if self.embedder_embed_attention else loc,
+                            embeddings
+                        )
+                    )
                 else:
-                    embeddings, _ = self.embedder(self._init_embed(loc))
+                    new_embeddings, _ = self.embedder(
+                        self._init_embed(
+                            loc[:, graph_size:] if self.embedder_embed_attention else loc,
+                            embeddings
+                        )
+                    )
+
+                if self.embedder_embed_attention:
+                    new_embeddings = torch.cat(
+                            (
+                                embeddings, new_embeddings[:, 1:, :]
+                            ),
+                            dim=1
+                    )
 
                 del fixed
-                fixed = self._precompute(embeddings)
+                fixed = self._precompute(new_embeddings)
                 graph_size = loc.size(1)
+                embeddings = new_embeddings
 
             # Now make log_p, selected desired output size by 'unshrinking'
             if self.shrink_size is not None and state.ids.size(0) < batch_size:
@@ -386,7 +435,7 @@ class AttentionModel(nn.Module):
 
         :param embeddings: (batch_size, graph_size, embed_dim)
         :param prev_a: (batch_size, num_steps)
-        :param first_a: Only used when num_steps = 1, action of first step or None if first step
+        :param first_a: Only used when num_steps = 1, acton of first step or None if first step
         :return: (batch_size, num_steps, context_dim)
         """
 
@@ -478,8 +527,10 @@ class AttentionModel(nn.Module):
             assert self.mask_logits, "Cannot mask inner without masking logits"
             compatibility[mask[None, :, :, None, :].expand_as(compatibility)] = -math.inf
 
+
         # Batch matrix multiplication to compute heads (n_heads, batch_size, num_steps, val_size)
         heads = torch.matmul(torch.softmax(compatibility, dim=-1), glimpse_V)
+
 
         # Project to get glimpse/updated context node embedding (batch_size, num_steps, embedding_dim)
         glimpse = self.project_out(
