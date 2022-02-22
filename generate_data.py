@@ -16,6 +16,11 @@ def generate_tsp_data(dataset_size, tsp_size, dynamic, probability):
     # Generate random numbers
     rand = np.random.uniform(size=(dataset_size, dyn_size))
 
+    # Remove any zeros
+    while np.any(rand == 0.0):
+        idx = np.where(x == 0.0)
+        x[idx] = np.random.uniform(size=idx[0].size)
+
     # Calculate the number of nodes revealed using log of the probability
     # rand < prob**nodes_revealed
     nodes_revealed = np.floor(np.log(rand) / np.log(probability))

@@ -13,10 +13,9 @@ class TSP(object):
     @staticmethod
     def get_costs(dataset, pi):
         # Check that tours are valid, i.e. contain 0 to n -1
-        assert (
-            torch.arange(pi.size(1), out=pi.data.new()).view(1, -1).expand_as(pi) ==
-            pi.data.sort(1)[0]
-        ).all(), "Invalid tour"
+        arranged_tensor = torch.arange(pi.size(1), out=pi.data.new()).view(1, -1).expand_as(pi)
+
+        assert (arranged_tensor == pi.data.sort(1)[0]).all(), "Invalid tour"
 
         # Gather dataset in order of tour
         d = dataset.gather(1, pi.unsqueeze(-1).expand_as(dataset))
@@ -81,6 +80,11 @@ class TSPDataset(Dataset):
 
                 # Sample random numbers
                 rand = torch.rand((num_samples, dyn_size))
+
+                # remove any zeros
+                while (rand == 0).any().item():
+                    idx = ((rand == 0).nonzero(as_tuple=True))
+                    rand[idx] = torch.rand(idx[0].shape)
 
                 # Calculate the number of nodes revealed using log of the probability
                 # rand < prob**nodes_revealed
