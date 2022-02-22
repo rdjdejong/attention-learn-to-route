@@ -6,6 +6,7 @@ from typing import NamedTuple
 from utils.tensor_functions import compute_in_batches
 
 from nets.graph_encoder import GraphAttentionEncoder
+from nets.deep_set_encoder import DeepSetEncoder
 from torch.nn import DataParallel
 from utils.beam_search import CachedLookup
 from utils.functions import sample_many
@@ -49,7 +50,9 @@ class AttentionModel(nn.Module):
                  probability=0.8,
                  embedder_embed_attention=False,
                  separate_dyn_embedder=False,
+                 deep_set_embedder=False,
                  n_encode_layers=2,
+                 n_deep_set_layers=2,
                  tanh_clipping=10.,
                  mask_inner=True,
                  mask_logits=True,
@@ -113,20 +116,42 @@ class AttentionModel(nn.Module):
             self.E_placeholder = nn.Parameter(torch.Tensor(embedding_dim))
             self.E_placeholder.data.uniform_(-1, 1)  # Placeholder should be in range of activations
 
-        self.embedder = GraphAttentionEncoder(
+        embedder = GraphAttentionEncoder(
             n_heads=n_heads,
             embed_dim=embedding_dim,
             n_layers=self.n_encode_layers,
             normalization=normalization
         )
 
+        if deep_set_embedder:
+            self.embedder = nn.Sequential(
+                DeepSetEncoder(
+                    embed_dim=embedding_dim,
+                    n_layers=n_deep_set_layers
+                ),
+                embedder
+            )
+        else:
+            self.embedder = embedder
+
         if self.separate_dyn_embedder:
-            self.dyn_embedder = GraphAttentionEncoder(
+            dyn_embedder = GraphAttentionEncoder(
                 n_heads=n_heads,
                 embed_dim=embedding_dim,
                 n_layers=self.n_encode_layers,
                 normalization=normalization
             )
+
+            if deep_set_embedder:
+                self.embedder = nn.Sequential(
+                    DeepSetEncoder(
+                        embed_dim=embedding_dim,
+                        n_layers=n_deep_set_layers
+                    ),
+                    embedder
+                )
+            else:
+                self.dyn_embedder = dyn_embedder
         else:
             self.dyn_embedder = self.embedder
 

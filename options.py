@@ -12,8 +12,6 @@ def get_options(args=None):
     parser.add_argument('--problem', default='tsp', help="The problem to solve, default 'tsp'")
     parser.add_argument('--dynamic', action='store_true', help='Specifies whether the problem is dynamic')
     parser.add_argument('--probability', type=float, default=0.2, help='If the problem is dynamic, specifies the probability that a new datapoint is added')
-    parser.add_argument('--encoder_embedding_attention', action='store_true', help='Specifies whether the encoder uses the current graph embedding when reoptimizing a dynamic graph')
-    parser.add_argument('--separate_dyn_encoder', action='store_true', help='Specifies whether the encoder used when reoptimizing is separate from the initial encoder')
     parser.add_argument('--graph_size', type=int, default=20, help="The size of the problem graph")
     parser.add_argument('--batch_size', type=int, default=512, help='Number of instances per batch during training')
     parser.add_argument('--epoch_size', type=int, default=1280000, help='Number of instances per epoch during training')
@@ -31,6 +29,13 @@ def get_options(args=None):
                         help='Clip the parameters to within +- this value using tanh. '
                              'Set to 0 to not perform any clipping.')
     parser.add_argument('--normalization', default='batch', help="Normalization type, 'batch' (default) or 'instance'")
+
+    # Attention model
+    parser.add_argument('--encoder_embedding_attention', action='store_true', help='Specifies whether the encoder uses the current graph embedding when reoptimizing a dynamic graph')
+    parser.add_argument('--separate_dyn_encoder', action='store_true', help='Specifies whether the encoder used when reoptimizing is separate from the initial encoder')
+    parser.add_argument('--deep_set_embedding', action='store_true', help='Specifies whether the attention encoder is preceded by a deep set encoder')
+    parser.add_argument('--n_deep_set_layers', type=int, default=3,
+                        help='Number of layers in the deep set encoder network')
 
     # Training
     parser.add_argument('--lr_model', type=float, default=1e-4, help="Set the learning rate for the actor network")
