@@ -33,7 +33,7 @@ def get_options(args=None):
     # Attention model
     parser.add_argument('--encoder_embedding_attention', action='store_true', help='Specifies whether the encoder uses the current graph embedding when reoptimizing a dynamic graph')
     parser.add_argument('--separate_dyn_encoder', action='store_true', help='Specifies whether the encoder used when reoptimizing is separate from the initial encoder')
-    parser.add_argument('--deep_set_embedding', action='store_true', help='Specifies whether the attention encoder is preceded by a deep set encoder')
+    parser.add_argument('--deep_set_encoder', action='store_true', help='Specifies whether the attention encoder is preceded by a deep set encoder')
     parser.add_argument('--n_deep_set_layers', type=int, default=3,
                         help='Number of layers in the deep set encoder network')
 

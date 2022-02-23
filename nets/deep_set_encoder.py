@@ -16,7 +16,7 @@ class DeepSetLayer(torch.nn.Module):
 
     def forward(self, X):
         return self.non_linear(
-            self.linear(X - self.pool(X, dim=-1).values.T) #TODO: make maxpool diagonal
+            self.linear(X - self.pool(X, dim=-1, keepdims=True).values)
         )
 
 
