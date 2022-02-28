@@ -143,12 +143,12 @@ class AttentionModel(nn.Module):
             )
 
             if deep_set_embedder:
-                self.embedder = nn.Sequential(
+                self.dyn_embedder = nn.Sequential(
                     DeepSetEncoder(
                         embed_dim=embedding_dim,
                         n_layers=n_deep_set_layers
                     ),
-                    embedder
+                    dyn_embedder
                 )
             else:
                 self.dyn_embedder = dyn_embedder
