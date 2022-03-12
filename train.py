@@ -139,6 +139,7 @@ def train_batch(
     x = move_to(x, opts.device)
     bl_val = move_to(bl_val, opts.device) if bl_val is not None else None
 
+    optimizer.zero_grad()
     # Evaluate model, get costs and log probabilities
     cost, log_likelihood = model(x)
 
@@ -150,7 +151,6 @@ def train_batch(
     loss = reinforce_loss + bl_loss
 
     # Perform backward pass and optimization step
-    optimizer.zero_grad()
     loss.backward()
     # Clip gradient norms and get (clipped) gradient norms for logging
     grad_norms = clip_grad_norms(optimizer.param_groups, opts.max_grad_norm)

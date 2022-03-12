@@ -36,6 +36,7 @@ def get_options(args=None):
     parser.add_argument('--deep_set_encoder', action='store_true', help='Specifies whether the attention encoder is preceded by a deep set encoder')
     parser.add_argument('--n_deep_set_layers', type=int, default=3,
                         help='Number of layers in the deep set encoder network')
+    parser.add_argument('--embedding_encoder', action='store_true', help='Specifies whether the encoder learns an embedding that passes messages to the nodes')
 
     # Training
     parser.add_argument('--lr_model', type=float, default=1e-4, help="Set the learning rate for the actor network")

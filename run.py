@@ -64,6 +64,7 @@ def run(opts):
         opts.encoder_embedding_attention,
         opts.separate_dyn_encoder,
         opts.deep_set_encoder,
+        opts.embedding_encoder,
         n_encode_layers=opts.n_encode_layers,
         n_deep_set_layers=opts.n_deep_set_layers,
         mask_inner=True,

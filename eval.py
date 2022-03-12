@@ -179,7 +179,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("datasets", nargs='+', help="Filename of the dataset(s) to evaluate")
     parser.add_argument("-f", action='store_true', help="Set true to overwrite")
-    parser.add_argument("-dynamic", action='store_true', help="Determines whether the problem is dynamic")
     parser.add_argument("-o", default=None, help="Name of the results file to write")
     parser.add_argument('--val_size', type=int, default=10000,
                         help='Number of instances used for reporting validation performance')
@@ -197,6 +196,7 @@ if __name__ == "__main__":
     parser.add_argument('--softmax_temperature', type=parse_softmax_temperature, default=1,
                         help="Softmax temperature (sampling or bs)")
     parser.add_argument('--model', type=str)
+    parser.add_argument("--dynamic", action='store_true', help="Determines whether the problem is dynamic")
     parser.add_argument('--no_cuda', action='store_true', help='Disable CUDA')
     parser.add_argument('--no_progress_bar', action='store_true', help='Disable progress bar')
     parser.add_argument('--compress_mask', action='store_true', help='Compress mask into long')

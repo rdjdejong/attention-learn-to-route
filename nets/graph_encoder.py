@@ -79,28 +79,33 @@ class MultiHeadAttention(nn.Module):
         shp_q = (self.n_heads, batch_size, n_query, -1)
 
         # Calculate queries, (n_heads, n_query, graph_size, key/val_size)
-        Q = torch.matmul(qflat, self.W_query).view(shp_q)
         # Calculate keys and values (n_heads, batch_size, graph_size, key/val_size)
-        K = torch.matmul(hflat, self.W_key).view(shp)
         V = torch.matmul(hflat, self.W_val).view(shp)
 
-        # Calculate compatibility (n_heads, batch_size, n_query, graph_size)
-        compatibility = self.norm_factor * torch.matmul(Q, K.transpose(2, 3))
+        # no need to calculate the attention weights when there is only 1 node in h
+        if graph_size > 1:
+            Q = torch.matmul(qflat, self.W_query).view(shp_q)
+            K = torch.matmul(hflat, self.W_key).view(shp)
 
-        # Optionally apply mask to prevent attention
-        if mask is not None:
-            mask = mask.view(1, batch_size, n_query, graph_size).expand_as(compatibility)
-            compatibility[mask] = -np.inf
+            # Calculate compatibility (n_heads, batch_size, n_query, graph_size)
+            compatibility = self.norm_factor * torch.matmul(Q, K.transpose(2, 3))
 
-        attn = torch.softmax(compatibility, dim=-1)
+            # Optionally apply mask to prevent attention
+            if mask is not None:
+                mask = mask.view(1, batch_size, n_query, graph_size).expand_as(compatibility)
+                compatibility[mask] = -np.inf
 
-        # If there are nodes with no neighbours then softmax returns nan so we fix them to 0
-        if mask is not None:
-            attnc = attn.clone()
-            attnc[mask] = 0
-            attn = attnc
+            attn = torch.softmax(compatibility, dim=-1)
 
-        heads = torch.matmul(attn, V)
+            # If there are nodes with no neighbours then softmax returns nan so we fix them to 0
+            if mask is not None:
+                attnc = attn.clone()
+                attnc[mask] = 0
+                attn = attnc
+
+            heads = torch.matmul(attn, V)
+        else:
+            heads = V.repeat(1, 1, n_query, 1)
 
         out = torch.mm(
             heads.permute(1, 2, 0, 3).contiguous().view(-1, self.n_heads * self.val_dim),
@@ -179,6 +184,113 @@ class MultiHeadAttentionLayer(nn.Sequential):
             Normalization(embed_dim, normalization)
         )
 
+
+class EmbeddingAttentionLayer(nn.Module):
+    def __init__(
+            self,
+            n_heads,
+            embed_dim,
+            feed_forward_nodes=0,
+            normalization='batch',
+    ):
+        super(EmbeddingAttentionLayer, self).__init__()
+
+        self.attn_nodes_to_embed = MultiHeadAttention(
+            n_heads,
+            input_dim=embed_dim,
+            embed_dim=embed_dim
+        )
+
+        self.attn_embed_to_nodes = MultiHeadAttention(
+            n_heads,
+            input_dim=embed_dim,
+            embed_dim=embed_dim
+        )
+
+        self.nodes_forward = nn.Sequential(
+                    nn.Linear(embed_dim, feed_forward_nodes),
+                    nn.ReLU(),
+                    nn.Linear(feed_forward_nodes, embed_dim),
+                    nn.ReLU()
+        ) if feed_forward_nodes > 0 else nn.Sequential(
+                    nn.Linear(embed_dim, embed_dim),
+                    nn.ReLU()
+        )
+
+        self.normalizer = Normalization(embed_dim, normalization)
+
+    def forward(self, input):
+
+        embedding = input[:, 0:1, :] # this slice keeps the dimension
+        nodes = input[:, 1:, :]
+
+        # Include a skip connection for the embedding
+        new_embedding = self.normalizer(
+            embedding + self.attn_nodes_to_embed(embedding, nodes)
+        )
+
+        # Include a skip connection for the nodes
+        new_nodes = self.normalizer(
+            nodes + self.attn_embed_to_nodes(
+                self.nodes_forward(nodes),
+                new_embedding
+            )
+        )
+
+        output = torch.cat((embedding, nodes), dim=1)
+
+        return output
+
+class EmbeddingAttentionEncoder(nn.Module):
+    def __init__(
+            self,
+            n_heads,
+            embed_dim,
+            n_layers,
+            normalization='batch',
+            feed_forward_hidden=512,
+            feed_forward_nodes=0
+    ):
+        super(EmbeddingAttentionEncoder, self).__init__()
+
+        self.layers = nn.Sequential(
+            *(
+                layer for layer in
+                (
+                    EmbeddingAttentionLayer(
+                        n_heads,
+                        embed_dim,
+                        feed_forward_nodes,
+                        normalization
+                    ),
+                    SkipConnection(
+                        nn.Sequential(
+                            nn.Linear(embed_dim, feed_forward_hidden),
+                            nn.ReLU(),
+                            nn.Linear(feed_forward_hidden, embed_dim),
+                            nn.ReLU()
+                        ) if feed_forward_hidden > 0 else nn.Sequential(
+                            nn.Linear(embed_dim, embed_dim),
+                            nn.ReLU()
+                        )
+                    ),
+                    Normalization(embed_dim, normalization)
+                )
+            for _ in range(n_layers)
+            )
+        )
+
+    def forward(self, input):
+
+        output = self.layers(input)
+
+        nodes = output[:, 1:, :]
+        embedding = output[:, 0, :]
+
+        return (
+            nodes,  # (batch_size, graph_size, embed_dim)
+            embedding  # learned embedding of graph, (batch_size, embed_dim)
+        )
 
 class GraphAttentionEncoder(nn.Module):
     def __init__(

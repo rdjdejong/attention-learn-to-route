@@ -5,7 +5,7 @@ import math
 from typing import NamedTuple
 from utils.tensor_functions import compute_in_batches
 
-from nets.graph_encoder import GraphAttentionEncoder
+from nets.graph_encoder import GraphAttentionEncoder, EmbeddingAttentionEncoder
 from nets.deep_set_encoder import DeepSetEncoder
 from torch.nn import DataParallel
 from utils.beam_search import CachedLookup
@@ -51,6 +51,7 @@ class AttentionModel(nn.Module):
                  embedder_embed_attention=False,
                  separate_dyn_embedder=False,
                  deep_set_embedder=False,
+                 embedding_embedder=False,
                  n_encode_layers=2,
                  n_deep_set_layers=2,
                  tanh_clipping=10.,
@@ -82,6 +83,7 @@ class AttentionModel(nn.Module):
         self.probability = probability
         self.embedder_embed_attention = embedder_embed_attention
         self.separate_dyn_embedder = separate_dyn_embedder
+        self.embedding_embedder = embedding_embedder
         self.n_heads = n_heads
         self.checkpoint_encoder = checkpoint_encoder
         self.shrink_size = shrink_size
@@ -112,16 +114,24 @@ class AttentionModel(nn.Module):
 
         self.init_embed = nn.Linear(node_dim, embedding_dim)
 
-        if self.embedder_embed_attention and not self.separate_dyn_embedder:
+        if (self.embedder_embed_attention and not self.separate_dyn_embedder) or self.embedding_embedder:
             self.E_placeholder = nn.Parameter(torch.Tensor(embedding_dim))
             self.E_placeholder.data.uniform_(-1, 1)  # Placeholder should be in range of activations
 
-        embedder = GraphAttentionEncoder(
-            n_heads=n_heads,
-            embed_dim=embedding_dim,
-            n_layers=self.n_encode_layers,
-            normalization=normalization
-        )
+        if self.embedding_embedder:
+            embedder = EmbeddingAttentionEncoder(
+                n_heads=n_heads,
+                embed_dim=embedding_dim,
+                n_layers=self.n_encode_layers,
+                normalization=normalization
+            )
+        else:
+            embedder = GraphAttentionEncoder(
+                n_heads=n_heads,
+                embed_dim=embedding_dim,
+                n_layers=self.n_encode_layers,
+                normalization=normalization
+            )
 
         if deep_set_embedder:
             self.embedder = nn.Sequential(
@@ -135,12 +145,20 @@ class AttentionModel(nn.Module):
             self.embedder = embedder
 
         if self.separate_dyn_embedder:
-            dyn_embedder = GraphAttentionEncoder(
-                n_heads=n_heads,
-                embed_dim=embedding_dim,
-                n_layers=self.n_encode_layers,
-                normalization=normalization
-            )
+            if self.embedding_embedder:
+                dyn_embedder = EmbeddingAttentionEncoder(
+                    n_heads=n_heads,
+                    embed_dim=embedding_dim,
+                    n_layers=self.n_encode_layers,
+                    normalization=normalization
+                )
+            else:
+                dyn_embedder = GraphAttentionEncoder(
+                    n_heads=n_heads,
+                    embed_dim=embedding_dim,
+                    n_layers=self.n_encode_layers,
+                    normalization=normalization
+                )
 
             if deep_set_embedder:
                 self.dyn_embedder = nn.Sequential(
@@ -179,14 +197,19 @@ class AttentionModel(nn.Module):
         state = self.problem.make_state(input)
 
         if self.checkpoint_encoder and self.training:  # Only checkpoint if we need gradients
-            embeddings, _ = checkpoint(self.embedder, self._init_embed(state.get_loc()))
+            embeddings, graph_embedding = checkpoint(
+                self.embedder,
+                self._init_embed(state.get_loc())
+            )
         else:
-            embeddings, _ = self.embedder(self._init_embed(state.get_loc()))
+            embeddings, graph_embedding = self.embedder(
+                self._init_embed(state.get_loc())
+            )
 
         if self.embedder_embed_attention and not self.separate_dyn_embedder:
             embeddings = embeddings[:, 1:, :]
 
-        ll, pi, state = self._inner(state, embeddings)
+        ll, pi, state = self._inner(state, embeddings, graph_embedding)
 
         cost, mask = self.problem.get_costs(state.get_loc(), pi)
         if return_pi:
@@ -270,9 +293,9 @@ class AttentionModel(nn.Module):
         else: # TSP
             embed = self.init_embed(input)
 
-        if self.embedder_embed_attention:
+        if self.embedder_embed_attention or self.embedding_embedder:
             if prev_embedding is None:
-                if self.separate_dyn_embedder:
+                if self.separate_dyn_embedder and not self.embedding_embedder:
                     return embed
                 else:
                     return torch.cat(
@@ -286,20 +309,20 @@ class AttentionModel(nn.Module):
                         ), dim=1
                     )
             return torch.cat(
-                (prev_embedding.mean(1, keepdims=True), embed),
+                (prev_embedding[:, None, :], embed),
                 dim=1
             )
 
         return embed
 
-    def _inner(self, state, embeddings):
+    def _inner(self, state, embeddings, graph_embedding):
 
         outputs = []
         sequences = []
 
 
         # Compute keys, values for the glimpse and keys for the logits once as they can be reused in every step
-        fixed = self._precompute(embeddings)
+        fixed = self._precompute(embeddings, graph_embedding)
 
         loc = state.get_loc()
         batch_size, graph_size, _ = loc.size()
@@ -331,18 +354,18 @@ class AttentionModel(nn.Module):
 
             if loc.size(1) > graph_size:
                 if self.checkpoint_encoder:  # Only checkpoint if we need gradients
-                    new_embeddings, _ = checkpoint(
+                    new_embeddings, graph_embedding = checkpoint(
                         self.dyn_embedder,
                         self._init_embed(
                             loc[:, graph_size:] if self.embedder_embed_attention else loc,
-                            embeddings
+                            graph_embedding
                         )
                     )
                 else:
-                    new_embeddings, _ = self.dyn_embedder(
+                    new_embeddings, graph_embedding = self.dyn_embedder(
                         self._init_embed(
                             loc[:, graph_size:] if self.embedder_embed_attention else loc,
-                            embeddings
+                            graph_embedding
                         )
                     )
 
@@ -355,7 +378,8 @@ class AttentionModel(nn.Module):
                     )
 
                 del fixed
-                fixed = self._precompute(new_embeddings)
+
+                fixed = self._precompute(new_embeddings, graph_embedding)
                 graph_size = loc.size(1)
                 embeddings = new_embeddings
 
@@ -414,10 +438,8 @@ class AttentionModel(nn.Module):
             assert False, "Unknown decode type"
         return selected
 
-    def _precompute(self, embeddings, num_steps=1):
+    def _precompute(self, embeddings, graph_embed, num_steps=1):
 
-        # The fixed context projection of the graph embedding is calculated only once for efficiency
-        graph_embed = embeddings.mean(1)
         # fixed context = (batch_size, 1, embed_dim) to make broadcastable with parallel timesteps
         fixed_context = self.project_fixed_context(graph_embed)[:, None, :]
 
