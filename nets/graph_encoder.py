@@ -126,7 +126,7 @@ class MultiHeadAttention(nn.Module):
 
 class Normalization(nn.Module):
 
-    def __init__(self, embed_dim, normalization='batch'):
+    def __init__(self, embed_dim, normalization='batch', track=True):
         super(Normalization, self).__init__()
 
         normalizer_class = {
@@ -134,7 +134,8 @@ class Normalization(nn.Module):
             'instance': nn.InstanceNorm1d
         }.get(normalization, None)
 
-        self.normalizer = normalizer_class(embed_dim, affine=True)
+        self.normalizer = normalizer_class(embed_dim, affine=True,
+                                           track_running_stats=track)
 
         # Normalization by default initializes affine parameters with bias 0 and weight unif(0,1) which is too large!
         # self.init_parameters()
@@ -207,7 +208,6 @@ class EmbeddingAttentionLayer(nn.Module):
             embed_dim=embed_dim
         )
 
-        """
         self.nodes_forward = nn.Sequential(
                     nn.Linear(embed_dim, feed_forward_nodes),
                     nn.ReLU(),
@@ -217,13 +217,12 @@ class EmbeddingAttentionLayer(nn.Module):
                     nn.Linear(embed_dim, embed_dim),
                     nn.ReLU()
         )
-        """
 
         self.normalizer = Normalization(embed_dim, normalization)
 
     def forward(self, input):
 
-        embedding = input[:, 0:1, :] # this slice keeps the dimension
+        embedding = input[:, 0:1, :]  # this slice keeps the dimension
         nodes = input[:, 1:, :]
 
         # Include a skip connection for the embedding
@@ -234,14 +233,15 @@ class EmbeddingAttentionLayer(nn.Module):
         # Include a skip connection for the nodes
         new_nodes = self.normalizer(
             nodes + self.attn_embed_to_nodes(
-                nodes,
+                self.nodes_forward(nodes),
                 new_embedding
             )
         )
 
-        output = torch.cat((embedding, nodes), dim=1)
+        output = torch.cat((new_embedding, new_nodes), dim=1)
 
         return output
+
 
 class EmbeddingAttentionEncoder(nn.Module):
     def __init__(
@@ -251,7 +251,7 @@ class EmbeddingAttentionEncoder(nn.Module):
             n_layers,
             normalization='batch',
             feed_forward_hidden=512,
-            feed_forward_nodes=0
+            feed_forward_nodes=512
     ):
         super(EmbeddingAttentionEncoder, self).__init__()
 
