@@ -218,7 +218,8 @@ class EmbeddingAttentionLayer(nn.Module):
                     nn.ReLU()
         )
 
-        self.normalizer = Normalization(embed_dim, normalization)
+        self.normalizer_embedding = Normalization(embed_dim, normalization)
+        self.normalize_nodes = Normalization(embed_dim, normalization)
 
     def forward(self, input):
 
@@ -226,12 +227,12 @@ class EmbeddingAttentionLayer(nn.Module):
         nodes = input[:, 1:, :]
 
         # Include a skip connection for the embedding
-        new_embedding = self.normalizer(
+        new_embedding = self.normalizer_embedding(
             embedding + self.attn_nodes_to_embed(embedding, nodes)
         )
 
         # Include a skip connection for the nodes
-        new_nodes = self.normalizer(
+        new_nodes = self.normalizer_nodes(
             nodes + self.attn_embed_to_nodes(
                 self.nodes_forward(nodes),
                 new_embedding
