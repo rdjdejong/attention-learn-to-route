@@ -251,7 +251,7 @@ class EmbeddingAttentionEncoder(nn.Module):
             n_layers,
             normalization='batch',
             feed_forward_hidden=512,
-            feed_forward_nodes=512
+            feed_forward_nodes=0
     ):
         super(EmbeddingAttentionEncoder, self).__init__()
 
