@@ -219,7 +219,7 @@ class EmbeddingAttentionLayer(nn.Module):
         )
 
         self.normalizer_embedding = Normalization(embed_dim, normalization)
-        self.normalize_nodes = Normalization(embed_dim, normalization)
+        self.normalizer_nodes = Normalization(embed_dim, normalization)
 
     def forward(self, input):
 
