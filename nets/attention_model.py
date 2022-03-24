@@ -209,6 +209,9 @@ class AttentionModel(nn.Module):
         if self.embedder_embed_attention and not self.separate_dyn_embedder:
             embeddings = embeddings[:, 1:, :]
 
+            if not self.embedding_embedder:
+                graph_embedding = embeddings.mean(dim=1)
+
         ll, pi, state = self._inner(state, embeddings, graph_embedding)
 
         cost, mask = self.problem.get_costs(state.get_loc(), pi)
@@ -376,6 +379,8 @@ class AttentionModel(nn.Module):
                             ),
                             dim=1
                     )
+                    if not self.embedding_embedder:
+                        graph_embedding = new_embeddings.mean(dim=1)
 
                 del fixed
 
