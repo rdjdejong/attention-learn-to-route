@@ -218,8 +218,8 @@ class EmbeddingAttentionLayer(nn.Module):
                     nn.ReLU()
         )
 
-        self.normalizer_embedding = Normalization(embed_dim, normalization)
-        self.normalizer_nodes = Normalization(embed_dim, normalization)
+        self.normalizer_embedding = Normalization(embed_dim, normalization, track=False)
+        self.normalizer_nodes = Normalization(embed_dim, normalization, track=False)
 
     def forward(self, input):
 
@@ -277,7 +277,7 @@ class EmbeddingAttentionEncoder(nn.Module):
                             nn.ReLU()
                         )
                     ),
-                    Normalization(embed_dim, normalization)
+                    Normalization(embed_dim, normalization, track=False)
                 )
             for _ in range(n_layers)
             )
