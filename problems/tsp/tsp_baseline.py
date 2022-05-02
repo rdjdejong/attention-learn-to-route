@@ -11,57 +11,71 @@ from problems.vrp.vrp_baseline import get_lkh_executable
 import torch
 from tqdm import tqdm
 import re
+import math
 
-
-def solve_gurobi(directory, name, loc, disable_cache=False, timeout=None, gap=None, dynamic=False):
+def solve_gurobi(directory, name, loc, disable_cache=False, timeout=None, gap=None,
+                 dynamic=False, re_opt=False, start=False):
     # Lazy import so we do not need to have gurobi installed to run this script
     from problems.tsp.tsp_gurobi import solve_euclidian_tsp as solve_euclidian_tsp_gurobi
+    from problems.tsp.tsp_gurobi import solve_euclidian_tsp_dynamic as solve_euclidian_tsp_gurobi_dynamic
 
     try:
-        problem_filename = os.path.join(directory, "{}.gurobi{}{}.pkl".format(
-            name, "" if timeout is None else "t{}".format(timeout), "" if gap is None else "gap{}".format(gap)))
+        problem_filename = os.path.join(directory, "{}.gurobi{}{}-{}-{}{}.pkl".format(
+            name, "dynamic" if dynamic else "", "re_opt" if re_opt else None,
+            start if start is not None else "no_start",
+            "" if timeout is None else "t{}".format(timeout), "" if gap is None else "gap{}".format(gap)))
 
         if dynamic:
-            loc, revealed = loc
+            if start:
+                loc, revealed, start = loc
+                if type(start[0]) == int:
+                    start = list(zip(start, start[1:] + [start[0]]))
+            else:
+                loc, revealed = loc
+                start = None
+
             revealed = [int(x) for x in revealed]
 
         if os.path.isfile(problem_filename) and not disable_cache:
             (cost, tour, duration) = load_dataset(problem_filename)
         else:
             # 0 = start, 1 = end so add depot twice
-            start = time.time()
+            t_start = time.time()
 
             if dynamic:
-                reoptim_ids = [int(idx+1) for idx, i in enumerate(revealed)
-                               if idx+1 < len(revealed) and i < revealed[idx+1]
-                               ]
-                tour_taken = []
-                cost, tour = solve_euclidian_tsp_gurobi(loc[:revealed[0]],
-                                                        tour_taken,
-                                                        threads=1,
-                                                        timeout=timeout,
-                                                        gap=gap
-                                                        )
-                for idx in reoptim_ids:
-                    tour_taken = tour[:idx]
-                    cost, tour = solve_euclidian_tsp_gurobi(loc[:revealed[idx]],
+                if re_opt:
+                    reoptim_ids = [int(idx+1) for idx, i in enumerate(revealed)
+                                if idx+1 < len(revealed) and i < revealed[idx+1]
+                                ]
+                    tour_taken = []
+                    cost, tour = solve_euclidian_tsp_gurobi(loc[:revealed[0]],
                                                             tour_taken,
                                                             threads=1,
                                                             timeout=timeout,
                                                             gap=gap
                                                             )
+                    for idx in reoptim_ids:
+                        tour_taken = tour[:idx]
+                        cost, tour = solve_euclidian_tsp_gurobi(loc[:revealed[idx]],
+                                                                tour_taken,
+                                                                threads=1,
+                                                                timeout=timeout,
+                                                                gap=gap
+                                                                )
+                else:
+                    cost, tour = solve_euclidian_tsp_gurobi_dynamic(loc, revealed, start=start, threads=1, timeout=timeout, gap=gap)
             else:
                 cost, tour = solve_euclidian_tsp_gurobi(loc, [], threads=1, timeout=timeout, gap=gap)
 
-            duration = time.time() - start  # Measure clock time
+            duration = time.time() - t_start  # Measure clock time
 
             save_dataset((cost, tour, duration), problem_filename)
 
-        # First and last node are depot(s), so first node is 2 but should be 1 (as depot is 0) so subtract 1
         if dynamic:
             total_cost = calc_tsp_length(loc[:revealed[-1]], tour)
         else:
             total_cost = calc_tsp_length(loc, tour)
+
         assert abs(total_cost - cost) <= 1e-5, "Cost is incorrect"
         return total_cost, tour, duration
 
@@ -366,6 +380,8 @@ if __name__ == "__main__":
     parser.add_argument("method",
                         help="Name of the method to evaluate, 'nn', 'gurobi', 'concorde' or '(nearest|random|farthest)_insertion'")
     parser.add_argument("--dynamic", action='store_true', help="Specifies if the problem is dynamic")
+    parser.add_argument("--re_opt", action='store_true', help="Specifies if the problem should be reoptimized")
+    parser.add_argument('--start', default=None, help="Name of the start directory")
     parser.add_argument("datasets", nargs='+', help="Filename of the dataset(s) to evaluate")
     parser.add_argument("-f", action='store_true', help="Set true to overwrite")
     parser.add_argument("-o", default=None, help="Name of the results file to write")
@@ -392,10 +408,12 @@ if __name__ == "__main__":
             results_dir = os.path.join(opts.results_dir, "tsp", dataset_basename)
             os.makedirs(results_dir, exist_ok=True)
 
-            out_file = os.path.join(results_dir, "{}{}{}-{}{}".format(
+            out_file = os.path.join(results_dir, "{}{}{}-{}{}-{}{}".format(
                 dataset_basename,
                 "offs{}".format(opts.offset) if opts.offset is not None else "",
                 "n{}".format(opts.n) if opts.n is not None else "",
+                "dynamic" if opts.dynamic else "",
+                "re_opt" if opts.re_opt else "",
                 opts.method, ext
             ))
         else:
@@ -433,7 +451,14 @@ if __name__ == "__main__":
 
             if opts.dynamic:
                 instances, revealed = load_dataset(dataset_path)
-                dataset = [(x, ) for x in zip(instances, revealed)]
+
+                if opts.start is not None:
+                    assert os.path.isfile(check_extension(opts.start)), "Start file does not exist!"
+                    start = [x[1] for x in load_dataset(opts.start)[0]]
+                    dataset = [(x, ) for x in zip(instances, revealed, start)]
+                else:
+                    dataset = [(x, ) for x in zip(instances, revealed)]
+
             else:
                 # TSP contains single loc array rather than tuple
                 dataset = [(instance, ) for instance in load_dataset(dataset_path)]
@@ -459,7 +484,8 @@ if __name__ == "__main__":
                     return solve_gurobi(*args, disable_cache=opts.disable_cache,
                                         timeout=runs if method[6:] == "t" else None,
                                         gap=float(runs) if method[6:] == "gap" else None,
-                                        dynamic=opts.dynamic)
+                                        dynamic=opts.dynamic, re_opt=opts.re_opt,
+                                        start=True if opts.start is not None else False)
             else:
                 assert method[-9:] == "insertion"
                 use_multiprocessing = True
