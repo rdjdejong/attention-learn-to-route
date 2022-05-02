@@ -231,14 +231,14 @@ def read_tsplib(filename):
     return tour.tolist()
 
 
-def calc_tsp_length(loc, tour):
+def calc_tsp_length(loc, tour, subtour=False):
     assert len(np.unique(tour)) == len(tour), "Tour cannot contain duplicates"
-    assert len(tour) == len(loc)
+    assert len(tour) == len(loc) or subtour
     sorted_locs = np.array(loc)[np.concatenate((tour, [tour[0]]))]
     return np.linalg.norm(sorted_locs[1:] - sorted_locs[:-1], axis=-1).sum()
 
 
-def _calc_insert_cost(D, prv, nxt, ins):
+def _calc_insert_cost(D, prv, nxt, ins, tour_taken=None, randomization=0.0):
     """
     Calculates insertion costs of inserting ins between prv and nxt
     :param D: distance matrix
@@ -247,38 +247,111 @@ def _calc_insert_cost(D, prv, nxt, ins):
     :param ins: node to insert
     :return:
     """
+    if tour_taken is None:
+        tour_taken = []
+
+    if len(tour_taken) > 0:
+        prv = np.insert(prv, 0, tour_taken)
+        nxt = np.roll(prv, -1)
+        result = D[prv, ins] \
+              + D[ins, nxt] \
+              - D[prv, nxt] \
+              + randomization * np.random.uniform(-1, 1) * D.max()
+        return result[len(tour_taken)-1:]
+
     return (
         D[prv, ins]
         + D[ins, nxt]
         - D[prv, nxt]
+        + randomization * np.random.uniform(-1, 1) * D.max()
     )
 
 
-def run_insertion(loc, method):
+def run_insertion(loc, method, tour=None, tour_taken=None, randomization=0.0):
     n = len(loc)
     D = distance_matrix(loc, loc)
 
+    if tour is None:
+        tour = []
+
+    if tour_taken is None:
+        tour_taken = []
+
     mask = np.zeros(n, dtype=bool)
-    tour = []  # np.empty((0, ), dtype=int)
-    for i in range(n):
+    mask[tour] = True
+    mask[tour_taken] = True
+    tour = tour  # np.empty((0, ), dtype=int)
+    for i in range(n - len(tour) - len(tour_taken)):
         feas = mask == 0
         feas_ind = np.flatnonzero(mask == 0)
         if method == 'random':
             # Order of instance is random so do in order for deterministic results
-            a = i
+            a = feas_ind[i]
         elif method == 'nearest':
-            if i == 0:
-                a = 0  # order does not matter so first is random
+            if len(tour) == 0:
+                a = feas_ind[0]  # order does not matter so first is random
             else:
                 a = feas_ind[D[np.ix_(feas, ~feas)].min(1).argmin()] # node nearest to any in tour
-        elif method == 'cheapest':
-            assert False, "Not yet implemented" # try all and find cheapest insertion cost
-
         elif method == 'farthest':
-            if i == 0:
+            if len(tour) == 0:
                 a = D.max(1).argmax()  # Node with farthest distance to any other node
             else:
                 a = feas_ind[D[np.ix_(feas, ~feas)].min(1).argmax()]  # node which has closest node in tour farthest
+
+        elif method == 'cheapest':
+            if len(tour) == 0:
+                a = feas_ind[0]
+            elif len(tour) == 1:
+                a = feas_ind[D[np.ix_(feas, ~feas)].min(1).argmax()]  # node which has closest node in tour farthest
+            else:
+                best_cost = math.inf
+                best_ind = -1
+                for idx in feas_ind:
+                    insert_cost = np.min(
+                        _calc_insert_cost(
+                            D,
+                            tour,
+                            np.roll(tour, -1),
+                            idx,
+                            tour_taken=tour_taken,
+                            randomization=randomization
+                        )
+                    )
+                    if insert_cost < best_cost:
+                        best_ind = idx
+                        best_cost = insert_cost
+                a = best_ind
+        elif method == 'regret':
+            if len(tour) == 0:
+                a = feas_ind[0]
+            elif len(tour) == 1:
+                a = feas_ind[D[np.ix_(feas, ~feas)].min(1).argmax()]  # node which has closest node in tour farthest
+            else:
+                best_cost = -math.inf
+                best_ind = -1
+                for idx in feas_ind:
+                    regret_costs = _calc_insert_cost(
+                            D,
+                            tour,
+                            np.roll(tour, -1),
+                            idx,
+                            tour_taken=tour_taken,
+                            randomization=randomization
+                        )
+                    regret_costs.sort()
+                    if len(tour) > 2:
+                        regret_cost = regret_costs[2] + \
+                            regret_costs[1] - \
+                            2 * regret_costs[0]
+                    else:
+                        regret_cost = regret_costs[1] - regret_costs[0]
+
+                    if regret_cost > best_cost:
+                        best_ind = idx
+                        best_cost = regret_cost
+
+                a = best_ind
+
         mask[a] = True
 
         if len(tour) == 0:
@@ -290,7 +363,8 @@ def run_insertion(loc, method):
                     D,
                     tour,
                     np.roll(tour, -1),
-                    a
+                    a,
+                    tour_taken=tour_taken
                 )
             )
             tour.insert(ind_insert + 1, a)
