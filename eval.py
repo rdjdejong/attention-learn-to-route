@@ -86,8 +86,10 @@ def eval_dataset(dataset_path, width, softmax_temp, opts):
         results_dir = os.path.join(opts.results_dir, model.problem.NAME, dataset_basename)
         os.makedirs(results_dir, exist_ok=True)
 
-        out_file = os.path.join(results_dir, "{}-{}-{}{}-t{}-{}-{}{}".format(
+        out_file = os.path.join(results_dir, "{}-{}-{}{}-{}{}-t{}-{}-{}{}".format(
             dataset_basename, model_name,
+            'dyn' if opts.dynamic else 'static',
+            opts.probability if str(opts.dynamic) else '',
             opts.decode_strategy,
             width if opts.decode_strategy != 'greedy' else '',
             softmax_temp, opts.offset, opts.offset + len(costs), ext
@@ -186,8 +188,6 @@ if __name__ == "__main__":
                         help='Offset where to start in dataset (default 0)')
     parser.add_argument('--eval_batch_size', type=int, default=1024,
                         help="Batch size to use during (baseline) evaluation")
-    # parser.add_argument('--decode_type', type=str, default='greedy',
-    #                     help='Decode type, greedy or sampling')
     parser.add_argument('--width', type=int, nargs='+',
                         help='Sizes of beam to use for beam search (or number of samples for sampling), '
                              '0 to disable (default), -1 for infinite')
@@ -197,6 +197,7 @@ if __name__ == "__main__":
                         help="Softmax temperature (sampling or bs)")
     parser.add_argument('--model', type=str)
     parser.add_argument("--dynamic", action='store_true', help="Determines whether the problem is dynamic")
+    parser.add_argument('--probability', type=float, default=0.2, help='probability of dynamic model')
     parser.add_argument('--no_cuda', action='store_true', help='Disable CUDA')
     parser.add_argument('--no_progress_bar', action='store_true', help='Disable progress bar')
     parser.add_argument('--compress_mask', action='store_true', help='Compress mask into long')

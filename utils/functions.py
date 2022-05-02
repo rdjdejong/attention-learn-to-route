@@ -108,7 +108,14 @@ def load_model(path, epoch=None):
         args['embedding_dim'],
         args['hidden_dim'],
         problem,
+        dynamic=args.get('dynamic', False),
+        probability=args.get('probability', 0.2),
+        embedder_embed_attention=args.get('encoder_embedding_attention', False),
+        separate_dyn_embedder=args.get('separate_dyn_encoder', False),
+        deep_set_embedder=args.get('deep_set_encoder', False),
+        embedding_embedder=args.get('embedding_encoder', False),
         n_encode_layers=args['n_encode_layers'],
+        n_deep_set_layers=args.get('n_deep_set_layers', 0),
         mask_inner=True,
         mask_logits=True,
         normalization=args['normalization'],
@@ -189,7 +196,6 @@ def sample_many(inner_func, get_cost_func, input, batch_rep=1, iter_rep=1):
         _log_p, pi = inner_func(input)
         # pi.view(-1, batch_rep, pi.size(-1))
         cost, mask = get_cost_func(input, pi)
-
         costs.append(cost.view(batch_rep, -1).t())
         pis.append(pi.view(batch_rep, -1, pi.size(-1)).transpose(0, 1))
 

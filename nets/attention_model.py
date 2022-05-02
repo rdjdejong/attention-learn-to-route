@@ -414,10 +414,16 @@ class AttentionModel(nn.Module):
         """
         # Bit ugly but we need to pass the embeddings as well.
         # Making a tuple will not work with the problem.get_cost function
+        def get_costs(input, pi):
+            state = self.problem.make_state(input)
+            state = state._replace(i=pi.size(1))
+
+            return self.problem.get_costs(state.get_loc(), pi)
+
         return sample_many(
-            lambda input: self._inner(*input),  # Need to unpack tuple into arguments
-            lambda input, pi: self.problem.get_costs(input[0], pi),  # Don't need embeddings as input to get_costs
-            (input, self.embedder(self._init_embed(input))[0]),  # Pack input with embeddings (additional input)
+            lambda input: self.forward(input, True)[1:],
+            get_costs,
+            input,
             batch_rep, iter_rep
         )
 
