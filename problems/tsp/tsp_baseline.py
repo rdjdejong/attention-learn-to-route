@@ -242,6 +242,7 @@ def solve_ALNS(directory, name, data, seeds=None, disable_cache=False):
             if cost < best_cost:
                 best_cost = cost
                 best_tour = copy.deepcopy(tour)
+            print(cost)
 
         duration = time.time() - t_start  # Measure clock time
 
@@ -249,7 +250,7 @@ def solve_ALNS(directory, name, data, seeds=None, disable_cache=False):
 
         save_dataset((best_cost, best_tour, duration), problem_filename)
 
-        return best_cost, best_tour
+        return best_cost, best_tour, duration
     except Exception as e:
         print("Exception occured")
         print(e)
@@ -784,7 +785,7 @@ if __name__ == "__main__":
                 use_multiprocessing = True  # We run one thread per instance
 
                 def run_func(args):
-                    return solve_ALNS(*args, seeds=range(64))
+                    return solve_ALNS(*args, seeds=range(32))
 
             elif method == "concorde":
                 use_multiprocessing = False
