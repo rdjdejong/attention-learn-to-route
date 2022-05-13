@@ -2,6 +2,7 @@ import argparse
 import numpy as np
 import os
 import time
+import copy
 from datetime import timedelta
 from scipy.spatial import distance_matrix
 from utils import run_all_in_pool
@@ -12,6 +13,247 @@ import torch
 from tqdm import tqdm
 import re
 import math
+
+def fn_destroy(loc, tour, method, tour_taken, n_removed=10,
+               randomization_degree=8, new_requests=None):
+
+    if new_requests is None:
+        removed = []
+    else:
+        removed = new_requests
+
+    if len(tour + new_requests) <= n_removed:
+        return [], tour + new_requests
+
+    if method == 0:
+        ids = list(range(len(tour)))
+        remove_ids = np.random.choice(ids, n_removed - len(removed),
+                                      replace=False)
+        removed = removed + [tour.pop(i) for i in sorted(remove_ids, reverse=True)]
+
+    elif method == 1:
+        length_tour = calc_tsp_length(loc, tour_taken + tour + new_requests)
+        while len(removed) < n_removed:
+            ids = list(range(len(tour)))
+            cost_func = lambda x: length_tour - calc_tsp_length(loc,
+                                                                tour_taken +
+                                                                tour[:x] +
+                                                                tour[x+1:],
+                                                                subtour=True)
+            subtour_costs = list(map(cost_func, ids))
+            idx = 1 + int((np.random.random(1) ** randomization_degree)[0] * len(tour))
+            remove_id = np.argsort(subtour_costs)[-idx]
+            removed.append(tour.pop(remove_id))
+
+    elif method == 2:
+        while len(removed) < n_removed:
+            ids = list(range(len(tour)))
+            reference = tour[np.random.choice(ids, 1).item()]
+            dist = np.linalg.norm(loc[reference] - loc[tour], axis=-1)
+            idx = int((np.random.random(1) ** randomization_degree)[0] * len(tour))
+            remove_id = np.argsort(dist)[idx]
+            removed.append(tour.pop(remove_id))
+
+    return tour, removed
+
+
+def fn_repair(loc, partial_tour, removed, method, tour_taken=None,
+              randomization=0.25):
+
+    if tour_taken is None:
+        tour_taken = []
+
+    if method < 2:
+        randomization = 0.0
+    if method % 2 == 0:
+        method = "regret"
+    else:
+        method = "cheapest"
+
+    _, tour = run_insertion(loc, method, tour=partial_tour,
+                            tour_taken=tour_taken, randomization=randomization)
+
+    return tour
+
+
+def destroy_and_repair(loc, tour, destroy, repair,
+                       tour_taken=None, new_requests=None):
+
+    if tour_taken is None:
+        tour_taken = []
+
+    if new_requests is None:
+        new_requests = []
+
+    loc = np.array(loc)
+    partial_tour, removed = fn_destroy(loc, tour, destroy, tour_taken,
+                                       new_requests=new_requests)
+    new_tour = fn_repair(loc, partial_tour, removed, repair,
+                         tour_taken=tour_taken)
+    return new_tour
+
+
+def anneal(length_best, length_current, length_new,
+           acceptance_probability=0.5, degradation=0.05):
+    temp = - (degradation / acceptance_probability) * length_best
+    probability = np.exp((length_new - length_current) / temp)
+
+    return (np.random.rand(1) < probability)[0]
+
+def two_opt(loc, tour, tour_taken):
+    best = tour
+    improved = True
+
+    while improved:
+        improved = False
+
+        for i in range(1, len(tour)-2):
+            for j in range(i+1, len(tour)):
+                if j-i == 1:
+                    continue # changes nothing, skip then
+
+                new_tour = tour[:]
+                new_tour[i:j] = tour[j-1:i-1:-1] # this is the 2woptSwap
+
+                if calc_tsp_length(loc, tour_taken + new_tour) < calc_tsp_length(loc, tour_taken + best):
+                    best = new_tour
+                    improved = True
+
+        tour = best
+
+    return best
+
+def ALNS(loc, tour, tour_taken=None, new_requests=None,
+         n_no_improvement=500, rho=0.1,
+         score_best=1.0, score_better=0.4, score_accepted=0.25,
+         freq_update_weights=200, freq_2_opt=200):
+
+    if tour_taken is None:
+        tour_taken = []
+
+    if new_requests is None:
+        new_requests = []
+
+    weights = np.ones((3, 4))
+    probabilities = (weights / weights.sum()).flatten()
+    scores = np.zeros((3, 4))
+    n_called = np.zeros((3, 4))
+
+    tour_best = copy.copy(tour)
+    tour_current = copy.copy(tour)
+    tour_full = tour_taken + tour_best + new_requests
+    length_best = calc_tsp_length(loc, tour_full)
+    length_current = length_best
+
+    iteration = 1
+    non_iteration = 1
+
+    choices = [(i, j) for i in range(3) for j in range(4)]
+
+    while non_iteration < n_no_improvement:
+        destroy, repair = choices[np.random.choice(12, 1, p=probabilities)[0]]
+
+        tour_new = destroy_and_repair(loc, tour_current, destroy, repair,
+                                      tour_taken=tour_taken,
+                                      new_requests=new_requests)
+
+        length_new = calc_tsp_length(loc, tour_taken + tour_new)
+
+        new_requests = []
+
+        iteration += 1
+        non_iteration += 1
+
+        if length_new < length_best:
+            tour_best = copy.copy(tour_new)
+            length_best = length_new
+
+            tour_current = copy.copy(tour_new)
+            length_current = length_new
+
+            non_iteration = 1
+            scores[destroy, repair] += score_best
+            n_called[destroy, repair] += 1.0
+
+        elif length_new < length_current:
+            tour_current = copy.copy(tour_new)
+            length_current = length_new
+
+            scores[destroy, repair] += score_better
+            n_called[destroy, repair] += 1.0
+
+        elif anneal(length_best, length_current, length_new):
+            tour_current = copy.copy(tour_new)
+            length_current = length_new
+
+            scores[destroy, repair] += score_accepted
+            n_called[destroy, repair] += 1.0
+
+        if iteration % freq_update_weights == 0:
+            weights[scores != 0] = (scores[scores != 0] / n_called[scores != 0]) \
+                * rho + (1.0 - rho) * weights[scores != 0]
+
+            probabilities = (weights / weights.sum()).flatten()
+            scores = np.zeros((3, 4))
+            n_called = np.zeros((3, 4))
+
+        if iteration % freq_2_opt == 0:
+            tour_current = two_opt(loc, tour_current, tour_taken)
+
+    return float(length_best), tour_taken + tour_best
+
+
+def solve_ALNS(directory, name, data, seeds=None, disable_cache=False):
+    if seeds is None:
+        seeds = [0]
+
+    try:
+        problem_filename = os.path.join(directory, f"{name}.alns.pkl")
+
+        if os.path.isfile(problem_filename) and not disable_cache:
+            (cost, tour, duration) = load_dataset(problem_filename)
+            return cost, tour, duration
+
+        loc, revealed = data
+        revealed = [int(x) for x in revealed]
+
+        t_start = time.time()
+        best_cost = np.inf
+        best_tour = None
+        for seed in seeds:
+            np.random.seed(seed)
+            _, tour = run_insertion(loc[:revealed[0]], 'cheapest')
+            cost, tour = ALNS(loc[:revealed[0]], tour)
+
+            reoptim_ids = [int(idx+1) for idx, i in enumerate(revealed)
+                        if idx+1 < len(revealed) and i < revealed[idx+1]
+                        ]
+
+            tour_taken = []
+
+            for idx in reoptim_ids:
+                tour_taken = tour[:idx]
+                tour_not_taken = tour[idx:]
+                new_requests = list(np.arange(len(tour), revealed[idx]))
+                cost, tour = ALNS(loc[:revealed[idx]], tour_not_taken,
+                                tour_taken=tour_taken,
+                                new_requests=new_requests)
+
+            if cost < best_cost:
+                best_cost = cost
+                best_tour = copy.deepcopy(tour)
+
+        duration = time.time() - t_start  # Measure clock time
+
+        assert best_tour is not None
+
+        save_dataset((best_cost, best_tour, duration), problem_filename)
+
+        return best_cost, best_tour
+    except Exception as e:
+        print("Exception occured")
+        print(e)
+        return None
 
 def solve_gurobi(directory, name, loc, disable_cache=False, timeout=None, gap=None,
                  dynamic=False, re_opt=False, start=False):
@@ -452,7 +694,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("method",
-                        help="Name of the method to evaluate, 'nn', 'gurobi', 'concorde' or '(nearest|random|farthest)_insertion'")
+                        help="Name of the method to evaluate, 'nn',  'alns', 'gurobi', 'concorde' or '(nearest|random|farthest)_insertion'")
     parser.add_argument("--dynamic", action='store_true', help="Specifies if the problem is dynamic")
     parser.add_argument("--re_opt", action='store_true', help="Specifies if the problem should be reoptimized")
     parser.add_argument('--start', default=None, help="Name of the start directory")
@@ -510,7 +752,7 @@ if __name__ == "__main__":
                 dataset_path, eval_batch_size, opts.no_cuda, opts.n,
                 opts.progress_bar_mininterval
             )
-        elif method in ("gurobi", "gurobigap", "gurobit", "concorde", "lkh") or method[-9:] == 'insertion':
+        elif method in ("gurobi", "gurobigap", "gurobit", "concorde", "lkh", "alns") or method[-9:] == 'insertion':
 
             target_dir = os.path.join(results_dir, "{}-{}-{}".format(
                 dataset_basename,
@@ -537,7 +779,14 @@ if __name__ == "__main__":
                 # TSP contains single loc array rather than tuple
                 dataset = [(instance, ) for instance in load_dataset(dataset_path)]
 
-            if method == "concorde":
+            if method == "alns":
+                assert opts.dynamic, "ALNS can only be used for dynamic problems"
+                use_multiprocessing = True  # We run one thread per instance
+
+                def run_func(args):
+                    return solve_ALNS(*args, seeds=range(64))
+
+            elif method == "concorde":
                 use_multiprocessing = False
                 executable = os.path.abspath(os.path.join('problems', 'tsp', 'concorde', 'concorde', 'TSP', 'concorde'))
 
