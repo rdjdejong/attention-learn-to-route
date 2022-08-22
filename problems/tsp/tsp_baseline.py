@@ -127,7 +127,6 @@ def ALNS(loc, tour, tour_taken=None, new_requests=None,
          n_no_improvement=500, rho=0.1,
          score_best=1.0, score_better=0.4, score_accepted=0.25,
          freq_update_weights=200, freq_2_opt=200):
-
     if tour_taken is None:
         tour_taken = []
 
@@ -139,9 +138,9 @@ def ALNS(loc, tour, tour_taken=None, new_requests=None,
     scores = np.zeros((3, 4))
     n_called = np.zeros((3, 4))
 
-    tour_best = copy.copy(tour)
+    tour_best = copy.copy(tour) + new_requests
     tour_current = copy.copy(tour)
-    tour_full = tour_taken + tour_best + new_requests
+    tour_full = tour_taken + tour_best
     length_best = calc_tsp_length(loc, tour_full)
     length_current = length_best
 
@@ -154,8 +153,8 @@ def ALNS(loc, tour, tour_taken=None, new_requests=None,
         destroy, repair = choices[np.random.choice(12, 1, p=probabilities)[0]]
 
         tour_new = destroy_and_repair(loc, tour_current, destroy, repair,
-                                      tour_taken=tour_taken,
-                                      new_requests=new_requests)
+                                    tour_taken=tour_taken,
+                                    new_requests=new_requests)
 
         length_new = calc_tsp_length(loc, tour_taken + tour_new)
 
@@ -198,6 +197,8 @@ def ALNS(loc, tour, tour_taken=None, new_requests=None,
             n_called = np.zeros((3, 4))
 
         if iteration % freq_2_opt == 0:
+            if len(tour_taken + tour_current) < len(loc):
+                tour_current = copy.copy(tour_best)
             tour_current = two_opt(loc, tour_current, tour_taken)
 
     return float(length_best), tour_taken + tour_best
@@ -242,7 +243,6 @@ def solve_ALNS(directory, name, data, seeds=None, disable_cache=False):
             if cost < best_cost:
                 best_cost = cost
                 best_tour = copy.deepcopy(tour)
-            print(cost)
 
         duration = time.time() - t_start  # Measure clock time
 
