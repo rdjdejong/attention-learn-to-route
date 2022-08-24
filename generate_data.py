@@ -24,7 +24,6 @@ def generate_tsp_data(dataset_size, tsp_size, dynamic, probability):
     # Calculate the number of nodes revealed using log of the probability
     # rand < prob**nodes_revealed
     nodes_revealed = np.floor(np.log(rand) / np.log(probability))
-    nodes_revealed[0] = nodes_revealed[0] + 1
 
     # Mask all nodes added above the max
     max_reached = np.cumsum(nodes_revealed, axis=1) + tsp_size
